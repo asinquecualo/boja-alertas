@@ -83,7 +83,17 @@ def clean_html(s):
 
 def main():
     state = load_state()
-    items = parse(fetch())
+
+    if os.environ.get("TEST_MODE") == "true":
+        items = [{
+            "id": "TEST-AUXILIAR-ADMINISTRATIVO-C2",
+            "title": "Convocatoria de 5 plazas de Auxiliar Administrativo C2 por turno libre",
+            "summary": "Prueba del sistema de alertas BOJA. Esta publicación es ficticia y sirve únicamente para comprobar el filtro.",
+            "updated": datetime.now(timezone.utc).isoformat(),
+            "link": "https://www.juntadeandalucia.es/boja/"
+        }]
+    else:
+        items = parse(fetch())
     # Keep a bounded state file.
     all_ids = list(state)
     new_relevant = []
