@@ -1,4 +1,27 @@
-    - name: Prueba Telegram
+name: Vigilar BOJA
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Prueba Telegram
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -27,28 +50,6 @@
           with urllib.request.urlopen(request) as response:
               print(response.read().decode())
           PY
-- name: Vigilar BOJA
-
-on:
-  schedule:
-    - cron: "17 * * * *"
-  workflow_dispatch:
-
-permissions:
-  contents: write
-
-jobs:
-  check:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
 
       - name: Comprobar BOJA
         env:
