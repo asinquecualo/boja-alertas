@@ -21,36 +21,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Prueba Telegram
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          python - <<'PY'
-          import os
-          import urllib.parse
-          import urllib.request
-
-          token = os.environ["TELEGRAM_BOT_TOKEN"]
-          chat_id = os.environ["TELEGRAM_CHAT_ID"]
-
-          data = urllib.parse.urlencode({
-              "chat_id": chat_id,
-              "text": "✅ Prueba desde GitHub Actions: el sistema BOJA funciona correctamente."
-          }).encode()
-
-          url = f"https://api.telegram.org/bot{token}/sendMessage"
-
-          request = urllib.request.Request(
-              url,
-              data=data,
-              method="POST"
-          )
-
-          with urllib.request.urlopen(request) as response:
-              print(response.read().decode())
-          PY
-
       - name: Comprobar BOJA
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
