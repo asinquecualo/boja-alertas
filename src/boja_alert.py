@@ -26,6 +26,7 @@ ADMIN_KEYWORDS = [
     "escala de auxiliares administrativos",
     "grupo c2",
     "subgrupo c2",
+    "prueba boja",
 ]
 
 CALL_KEYWORDS = [
@@ -38,6 +39,7 @@ CALL_KEYWORDS = [
     "oposiciones",
     "plazas",
     "oferta de empleo publico",
+    "prueba"
 ]
 
 IMPORTANT_KEYWORDS = [
