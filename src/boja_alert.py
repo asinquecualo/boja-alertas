@@ -437,66 +437,98 @@ def fetch_empleo_publico():
         errors="replace"
     )
 
-    print(
-        "========== RESULTADO C2.1000 =========="
-    )
+    parser = PortalParser(url)
 
-    # Buscamos textos relevantes directamente
-    # en el HTML, no solamente enlaces.
-    normalized = norm(text)
-
-    for keyword in [
-        "c2.1000",
-        "cuerpo auxiliar administrativo",
-        "auxiliar administrativo",
-        "proceso selectivo",
-        "convocatoria",
-        "turno libre",
-        "acceso libre",
-    ]:
-
-        print(
-            f"'{keyword}':",
-            norm(keyword) in normalized
-        )
-
-    # Mostrar fragmentos alrededor de C2.1000
-    pattern = re.compile(
-        r".{0,1000}c2\.1000.{0,3000}",
-        re.IGNORECASE | re.DOTALL
-    )
-
-    matches = pattern.findall(text)
+    parser.feed(text)
 
     print(
-        "Apariciones de C2.1000:",
-        len(matches)
+        "Enlaces encontrados:",
+        len(parser.links)
     )
 
-    for number, match in enumerate(
-        matches[:3],
-        1
-    ):
+    print(
+        "========== ENLACES C2.1000 =========="
+    )
 
-        cleaned = re.sub(
-            r"\s+",
-            " ",
-            match
-        )
+    items = []
+
+    for link in parser.links:
+
+        title = link["text"]
+        link_url = link["url"]
+
+        if not title:
+            continue
 
         print(
-            f"\n----- RESULTADO {number} -----"
+            "LINK:",
+            title,
+            "=>",
+            link_url
         )
 
-        print(
-            cleaned[:4000]
+        # Ignorar navegación
+        if title in [
+            "Inicio",
+            "Sede Electrónica del Empleo Público",
+            "Acceso A Trámites",
+            "Skip to main content",
+        ]:
+            continue
+
+        normalized = norm(
+            title
+            + " "
+            + link_url
+        )
+
+        # Nos interesan enlaces relacionados con:
+        # - convocatorias
+        # - procesos selectivos
+        # - acceso libre
+        # - auxiliar administrativo
+        if not any(
+            keyword in normalized
+            for keyword in [
+                "auxiliar administrativo",
+                "cuerpo auxiliar administrativo",
+                "convocatoria",
+                "proceso selectivo",
+                "acceso libre",
+            ]
+        ):
+            continue
+
+        item_id = hashlib.sha256(
+            (
+                "EMPLEO_PUBLICO|"
+                + link_url
+                + "|"
+                + title
+            ).encode()
+        ).hexdigest()
+
+        items.append(
+            {
+                "id": item_id,
+                "source": "EMPLEO_PUBLICO",
+                "title": title,
+                "summary": "",
+                "updated": "",
+                "link": link_url,
+            }
         )
 
     print(
-        "========================================"
+        "====================================="
     )
 
-    return []
+    print(
+        "Procesos C2.1000 encontrados:",
+        len(items)
+    )
+
+    return items
 
 # ============================================================
 # CLASIFICACIÓN
