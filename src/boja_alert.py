@@ -418,12 +418,19 @@ class PortalParser(HTMLParser):
 
 def fetch_empleo_publico():
 
-    html = download(
-        EMPLEO_PUBLICO_URL
+    # Página oficial de procesos selectivos en curso
+    procesos_url = (
+        "https://portalempleopublico.juntadeandalucia.es/"
+        "sede/acceso-tramites/"
+        "seguimiento-procesos-selectivos"
+        "?field_en_curso_value=1"
+        "&field_20_de_plazas_adicionales_value=All"
     )
 
+    html = download(procesos_url)
+
     parser = PortalParser(
-        EMPLEO_PUBLICO_URL
+        procesos_url
     )
 
     parser.feed(
@@ -450,36 +457,25 @@ def fetch_empleo_publico():
 
         seen_urls.add(url)
 
-        normalized_url = norm(
-            url
-        )
-
-        normalized_text = norm(
+        combined = norm(
             text
-        )
-
-        # Solo nos interesan enlaces que parezcan
-        # anuncios/procesos de empleo.
-        if (
-            "anuncio" not in normalized_url
-            and "empleo" not in normalized_url
-            and "c2.1000" not in normalized_text
-            and "auxiliar administrativo"
-            not in normalized_text
-        ):
-            continue
-
-        # Solo conservar enlaces potencialmente
-        # relacionados con nuestra oposición.
-        combined = (
-            normalized_text
             + " "
-            + normalized_url
+            + url
         )
 
+        # Buscamos específicamente nuestro cuerpo.
+        #
+        # C2.1000 es el código oficial del
+        # Cuerpo Auxiliar Administrativo.
         if not any(
             norm(keyword) in combined
-            for keyword in ADMIN_KEYWORDS
+            for keyword in [
+                "c2.1000",
+                "c2 1000",
+                "cuerpo auxiliar administrativo",
+                "auxiliar administrativo",
+                "auxiliar administrativa",
+            ]
         ):
             continue
 
@@ -502,16 +498,26 @@ def fetch_empleo_publico():
                 "link": url,
             }
         )
-        
-    print("DEBUG: enlaces encontrados:", len(parser.links))
 
-    for link in parser.links[:30]:
+    print(
+        "Portal: enlaces analizados:",
+        len(parser.links)
+    )
+
+    print(
+        "Portal: anuncios C2/Auxiliar:",
+        len(items)
+    )
+
+    for item in items:
+
         print(
-            "DEBUG LINK:",
-            link["text"][:150],
+            "PORTAL MATCH:",
+            item["title"],
             "=>",
-            link["url"]
+            item["link"]
         )
+
     return items
 
 
