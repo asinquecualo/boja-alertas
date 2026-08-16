@@ -18,12 +18,18 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
+from datetime import date, timedelta
+from urllib.error import HTTPError
 
 
 BOJA_FEED_URL = "https://www.juntadeandalucia.es/boja/distribucion/s53.xml"
 PORTAL_BASE_URL = "https://portalempleopublico.juntadeandalucia.es"
 PORTAL_VIEW_PATH = "/sede/acceso-tramites/seguimiento-procesos-selectivos"
 PORTAL_AJAX_URL = f"{PORTAL_BASE_URL}/views/ajax"
+BOP_SEVILLA_INDEX_URL = (
+    "https://bopsevilla.dipusevilla.es/publica/consulta-de-bops/index.html"
+)
+BOE_SUMMARY_API = "https://boe.es/datosabiertos/api/boe/sumario"
 STATE_FILE = Path(os.environ.get("STATE_FILE", "state.json"))
 
 # Valores del formulario Drupal confirmados para C2.1000.
@@ -43,7 +49,7 @@ ADMIN_KEYWORDS = (
     "escala auxiliar administrativa", "c2.1000", "c2 1000",
 )
 CALL_KEYWORDS = (
-    "convocatoria", "bases", "proceso selectivo", "oposicion", "plazas",
+    "convocatoria", "convoca", "bases", "proceso selectivo", "oposicion", "plazas",
     "oferta de empleo publico", "turno libre", "acceso libre",
 )
 IMPORTANT_KEYWORDS = (
@@ -73,7 +79,11 @@ def identifier(*parts: str) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def request(url: str, data: dict[str, str] | None = None) -> bytes:
+def request(
+    url: str,
+    data: dict[str, str] | None = None,
+    accept: str = "application/json, text/javascript, */*; q=0.01",
+) -> bytes:
     """Hace una petición HTTP con el encabezado de un navegador corriente."""
     encoded = urllib.parse.urlencode(data).encode("utf-8") if data else None
     req = urllib.request.Request(
@@ -81,7 +91,7 @@ def request(url: str, data: dict[str, str] | None = None) -> bytes:
         data=encoded,
         headers={
             "User-Agent": "Mozilla/5.0 (compatible; boja-alertas/2.0)",
-            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Accept": accept,
             "X-Requested-With": "XMLHttpRequest",
             "Referer": f"{PORTAL_BASE_URL}{PORTAL_VIEW_PATH}",
         },
@@ -232,6 +242,79 @@ def extract_processes(results_html: str) -> list[dict[str, str]]:
     return processes
 
 
+class BopSevillaParser(HTMLParser):
+    """Extrae los anuncios de la página de un boletín del BOP de Sevilla."""
+
+    def __init__(self, base_url: str) -> None:
+        super().__init__(convert_charrefs=True)
+        self.base_url = base_url
+        self.items: list[dict[str, str]] = []
+        self._href: str | None = None
+        self._anchor_text: list[str] = []
+        self._next_link = ""
+        self._in_title = False
+        self._title_text: list[str] = []
+        self._current: dict[str, Any] | None = None
+
+    def _finish(self) -> None:
+        if not self._current:
+            return
+        title = clean_text(self._current["title"])
+        link = self._current["link"]
+        summary = clean_text(" ".join(self._current["summary"]))
+        if title and link:
+            cve_match = re.search(r"BOP-SE-\d{4}-\d+", summary, re.IGNORECASE)
+            item_id = cve_match.group(0).upper() if cve_match else identifier(
+                "BOP_SEVILLA", title, link
+            )
+            self.items.append({
+                "id": item_id,
+                "source": "BOP_SEVILLA",
+                "title": title,
+                "summary": summary,
+                "updated": "",
+                "link": link,
+            })
+        self._current = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "a":
+            self._href = dict(attrs).get("href")
+            self._anchor_text = []
+        elif tag == "h3":
+            self._in_title = True
+            self._title_text = []
+
+    def handle_data(self, data: str) -> None:
+        if self._href is not None:
+            self._anchor_text.append(data)
+        if self._in_title:
+            self._title_text.append(data)
+        elif self._current is not None:
+            self._current["summary"].append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "a" and self._href is not None:
+            if clean_text(" ".join(self._anchor_text)).lower() == "ir al detalle":
+                # El siguiente enlace de detalle marca el fin del anuncio anterior.
+                self._finish()
+                self._next_link = urllib.parse.urljoin(self.base_url, self._href)
+            self._href = None
+            self._anchor_text = []
+        elif tag == "h3" and self._in_title:
+            title = clean_text(" ".join(self._title_text))
+            if title and self._next_link:
+                self._finish()
+                self._current = {"title": title, "link": self._next_link, "summary": []}
+                self._next_link = ""
+            self._in_title = False
+            self._title_text = []
+
+    def close(self) -> None:
+        super().close()
+        self._finish()
+
+
 def fetch_empleo_publico() -> list[dict[str, Any]]:
     # En esta vista los filtros expuestos deben viajar en la URL. Si se envían
     # únicamente en el cuerpo POST, Drupal responde correctamente pero ignora
@@ -282,6 +365,63 @@ def fetch_boja() -> list[dict[str, str]]:
     return items
 
 
+def fetch_bop_sevilla() -> list[dict[str, str]]:
+    """Descarga el BOP más reciente publicado y devuelve sus anuncios."""
+    landing = request(BOP_SEVILLA_INDEX_URL).decode("utf-8", errors="replace")
+    match = re.search(
+        r'href=["\']([^"\']*/buscador/BOP-\d{2}-\d{2}-\d{4}/?)["\']',
+        landing,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        raise RuntimeError("No se ha podido localizar el último boletín del BOP de Sevilla")
+    bulletin_url = urllib.parse.urljoin(BOP_SEVILLA_INDEX_URL, html.unescape(match.group(1)))
+    parser = BopSevillaParser(bulletin_url)
+    parser.feed(request(bulletin_url).decode("utf-8", errors="replace"))
+    parser.close()
+    print(f"BOP Sevilla: {len(parser.items)} anuncios en el último boletín")
+    return parser.items
+
+
+def parse_boe_summary(xml_data: bytes, published: str) -> list[dict[str, str]]:
+    """Convierte la respuesta XML de la API oficial de sumarios del BOE."""
+    root = ET.fromstring(xml_data)
+    items: list[dict[str, str]] = []
+    for element in root.iter("item"):
+        item_id = element.findtext("identificador", "")
+        title = clean_text(element.findtext("titulo", ""))
+        link = element.findtext("url_html", "") or element.findtext("url_pdf", "")
+        if item_id and title and link:
+            items.append({
+                "id": item_id,
+                "source": "BOE",
+                "title": title,
+                "summary": "",
+                "updated": published,
+                "link": link,
+            })
+    return items
+
+
+def fetch_boe() -> list[dict[str, str]]:
+    """Consulta hasta siete días para cubrir festivos o una ejecución fallida."""
+    items: list[dict[str, str]] = []
+    for offset in range(7):
+        day = date.today() - timedelta(days=offset)
+        try:
+            summary = request(
+                f"{BOE_SUMMARY_API}/{day:%Y%m%d}",
+                accept="application/xml",
+            )
+        except HTTPError as error:
+            if error.code == 404:  # Fin de semana o día sin publicación.
+                continue
+            raise
+        items.extend(parse_boe_summary(summary, day.isoformat()))
+    print(f"BOE: {len(items)} publicaciones revisadas (últimos 7 días)")
+    return items
+
+
 def classify_boja(item: dict[str, str]) -> dict[str, Any] | None:
     text = norm(f"{item['title']} {item['summary']}")
     if any(word in text for word in EXCLUDE_KEYWORDS):
@@ -324,7 +464,13 @@ def telegram(message: str) -> None:
 
 
 def notification(item: dict[str, Any]) -> str:
-    label = "PORTAL EMPLEO PÚBLICO" if item["source"] == "EMPLEO_PUBLICO" else "BOJA"
+    labels = {
+        "BOJA": "BOJA",
+        "EMPLEO_PUBLICO": "PORTAL EMPLEO PÚBLICO",
+        "BOP_SEVILLA": "BOP SEVILLA",
+        "BOE": "BOE",
+    }
+    label = labels[item["source"]]
     category = item["classification"]["category"]
     message = f"🔔 <b>{label} — {html.escape(category)}</b>\n\n<b>{html.escape(item['title'])}</b>"
     if item.get("updated"):
@@ -340,12 +486,14 @@ def main() -> None:
     seen = load_state()
     boja_items = fetch_boja()
     portal_items = fetch_empleo_publico()
+    bop_sevilla_items = fetch_bop_sevilla()
+    boe_items = fetch_boe()
     sent_or_irrelevant: set[str] = set()
 
-    for item in boja_items + portal_items:
+    for item in boja_items + portal_items + bop_sevilla_items + boe_items:
         if item["id"] in seen:
             continue
-        if item["source"] == "BOJA":
+        if item["source"] in {"BOJA", "BOP_SEVILLA", "BOE"}:
             classification = classify_boja(item)
             if not classification:
                 # Los elementos BOJA irrelevantes se recuerdan para no reanalizarlos.
