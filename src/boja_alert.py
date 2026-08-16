@@ -433,43 +433,39 @@ def fetch_empleo_publico():
         errors="replace"
     )
 
-    print("========== PORTAL MATCH DEBUG ==========")
+    print("========== C2.1000 FILTER DEBUG ==========")
 
-    # Buscar todas las apariciones de C2.1000
+    # Buscar el option exacto de C2.1000
     pattern = re.compile(
-        r".{0,500}c2\.1000.{0,1000}",
+        r"<select[^>]*>.*?"
+        r'<option[^>]*value="2405"[^>]*>'
+        r".*?C2\.1000 Cuerpo Auxiliar Administrativo"
+        r".*?</select>",
         re.IGNORECASE | re.DOTALL
     )
 
-    matches = pattern.findall(text)
+    match = pattern.search(text)
 
-    print(
-        "Apariciones encontradas:",
-        len(matches)
-    )
+    if match:
 
-    for number, match in enumerate(
-        matches[:5],
-        1
-    ):
-
-        print(
-            f"\n----- MATCH {number} -----"
-        )
-
-        # Reducimos espacios para que el log sea legible
-        cleaned = re.sub(
+        block = re.sub(
             r"\s+",
             " ",
-            match
+            match.group(0)
         )
 
         print(
-            cleaned[:2000]
+            block[:5000]
+        )
+
+    else:
+
+        print(
+            "NO SE ENCONTRÓ EL SELECT"
         )
 
     print(
-        "\n========================================"
+        "=========================================="
     )
 
     return []
