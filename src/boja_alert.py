@@ -418,13 +418,35 @@ class PortalParser(HTMLParser):
 
 def fetch_empleo_publico():
 
-    url = (
+    base_url = (
         "https://portalempleopublico.juntadeandalucia.es/"
         "sede/acceso-tramites/"
         "seguimiento-procesos-selectivos"
     )
 
-    print("Consultando formulario del Portal de Empleo Público...")
+    params = {
+        "field_ambito_target_id": "All",
+        "field_tipo_de_acceso_target_id": "56",
+        "field_tipo_personal_target_id": "464",
+        "field_cuerpo_grupo_target_id": "2405",
+        "field_especialidad_opcion_catego_target_id": "All",
+        "field_especialidad_lab_multi_target_id": "All",
+        "field_categoria_funcional_target_id": "All",
+        "field_estado_target_id": "All",
+        "field_en_curso_value": "1",
+        "field_20_de_plazas_adicionales_value": "All",
+    }
+
+    url = (
+        base_url
+        + "?"
+        + urllib.parse.urlencode(params)
+    )
+
+    print(
+        "Consultando Portal Empleo Público:"
+    )
+    print(url)
 
     html = download(url)
 
@@ -433,88 +455,163 @@ def fetch_empleo_publico():
         errors="replace"
     )
 
-    print("========== FORMULARIO PORTAL ==========")
+    # ----------------------------------------------------
+    # Extraer texto visible
+    # ----------------------------------------------------
 
-    # Buscar todos los formularios
-    forms = re.findall(
-        r"<form\b.*?</form>",
+    visible = re.sub(
+        r"<script.*?</script>",
+        " ",
         text,
         flags=re.IGNORECASE | re.DOTALL
     )
 
-    print(
-        "Formularios encontrados:",
-        len(forms)
+    visible = re.sub(
+        r"<style.*?</style>",
+        " ",
+        visible,
+        flags=re.IGNORECASE | re.DOTALL
     )
 
-    for i, form in enumerate(forms, 1):
+    visible = re.sub(
+        r"<[^>]+>",
+        " ",
+        visible
+    )
 
-        # Solo nos interesa el formulario que contiene
-        # el filtro Cuerpo / Grupo.
-        if "field_cuerpo_grupo_target_id" not in form:
+    visible = re.sub(
+        r"\s+",
+        " ",
+        visible
+    ).strip()
+
+    normalized = norm(visible)
+
+    print(
+        "Portal: texto recibido:",
+        len(visible),
+        "caracteres"
+    )
+
+    # ----------------------------------------------------
+    # Buscar indicios de resultados
+    # ----------------------------------------------------
+
+    keywords = [
+        "cuerpo auxiliar administrativo",
+        "auxiliar administrativo",
+        "convocatoria",
+        "acceso libre",
+        "proceso selectivo",
+        "pendiente apertura de plazo",
+        "en plazo de presentación",
+    ]
+
+    print(
+        "========== PORTAL FILTER RESULT =========="
+    )
+
+    for keyword in keywords:
+
+        print(
+            f"{keyword}:",
+            norm(keyword) in normalized
+        )
+
+    print(
+        "=========================================="
+    )
+
+    # ----------------------------------------------------
+    # Extraer enlaces
+    # ----------------------------------------------------
+
+    parser = PortalParser(
+        base_url
+    )
+
+    parser.feed(
+        text
+    )
+
+    print(
+        "Portal: enlaces encontrados:",
+        len(parser.links)
+    )
+
+    items = []
+
+    for link in parser.links:
+
+        title = link["text"].strip()
+        link_url = link["url"]
+
+        if not title:
             continue
 
-        print(
-            f"\n----- FORMULARIO {i} -----"
+        combined = norm(
+            title
+            + " "
+            + link_url
         )
 
-        # action
-        action = re.search(
-            r'<form[^>]*action=["\']([^"\']+)',
-            form,
-            flags=re.IGNORECASE
+        # Ignorar navegación general
+        if any(
+            x in combined
+            for x in [
+                "skip to main content",
+                "sede electronica",
+                "acceso a tramites",
+            ]
+        ):
+            continue
+
+        # Nos interesan procesos relacionados con
+        # Auxiliar Administrativo.
+        if not any(
+            x in combined
+            for x in [
+                "auxiliar administrativo",
+                "cuerpo auxiliar administrativo",
+                "c2.1000",
+            ]
+        ):
+            continue
+
+        item_id = hashlib.sha256(
+            (
+                "EMPLEO_PUBLICO|"
+                + link_url
+                + "|"
+                + title
+            ).encode()
+        ).hexdigest()
+
+        items.append(
+            {
+                "id": item_id,
+                "source": "EMPLEO_PUBLICO",
+                "title": title,
+                "summary": "",
+                "updated": "",
+                "link": link_url,
+            }
         )
-
-        if action:
-            print(
-                "ACTION:",
-                action.group(1)
-            )
-
-        # method
-        method = re.search(
-            r'<form[^>]*method=["\']([^"\']+)',
-            form,
-            flags=re.IGNORECASE
-        )
-
-        if method:
-            print(
-                "METHOD:",
-                method.group(1)
-            )
-
-        # Todos los campos name/value
-        fields = re.findall(
-            r'<(?:input|select|button)[^>]*'
-            r'(?:name|value)=["\'][^"\']*["\'][^>]*>',
-            form,
-            flags=re.IGNORECASE
-        )
-
-        print(
-            "CAMPOS:"
-        )
-
-        for field in fields[:100]:
-            cleaned = re.sub(
-                r"\s+",
-                " ",
-                field
-            )
-            print(
-                cleaned[:500]
-            )
 
         print(
-            "-----------------------------"
+            "PROCESO:",
+            title,
+            "=>",
+            link_url
         )
 
     print(
-        "========================================"
+        "Portal Empleo Público:",
+        len(items),
+        "procesos encontrados"
     )
 
-    return []
+    return items
 
 # ============================================================
 # CLASIFICACIÓN
