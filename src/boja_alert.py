@@ -427,105 +427,76 @@ def fetch_empleo_publico():
         "&field_cuerpo_grupo_target_id=2405"
     )
 
-    print(
-        "Consultando Portal C2.1000:"
-    )
+    print("Consultando Portal C2.1000:")
     print(url)
 
     html = download(url)
 
-    parser = PortalParser(url)
-
-    parser.feed(
-        html.decode(
-            "utf-8",
-            errors="replace"
-        )
+    text = html.decode(
+        "utf-8",
+        errors="replace"
     )
 
     print(
-        "Enlaces encontrados:",
-        len(parser.links)
+        "========== RESULTADO C2.1000 =========="
     )
 
-    items = []
+    # Buscamos textos relevantes directamente
+    # en el HTML, no solamente enlaces.
+    normalized = norm(text)
 
-    seen_urls = set()
-
-    for link in parser.links:
-
-        link_url = link["url"]
-        text = link["text"]
-
-        if not text:
-            continue
-
-        if link_url in seen_urls:
-            continue
-
-        seen_urls.add(link_url)
+    for keyword in [
+        "c2.1000",
+        "cuerpo auxiliar administrativo",
+        "auxiliar administrativo",
+        "proceso selectivo",
+        "convocatoria",
+        "turno libre",
+        "acceso libre",
+    ]:
 
         print(
-            "PORTAL LINK:",
-            text,
-            "=>",
-            link_url
+            f"'{keyword}':",
+            norm(keyword) in normalized
         )
 
-        # Ignoramos navegación
-        if (
-            "Skip to main content" in text
-            or text in [
-                "Inicio",
-                "Sede Electrónica del Empleo Público",
-                "Acceso A Trámites",
-            ]
-        ):
-            continue
+    # Mostrar fragmentos alrededor de C2.1000
+    pattern = re.compile(
+        r".{0,1000}c2\.1000.{0,3000}",
+        re.IGNORECASE | re.DOTALL
+    )
 
-        combined = norm(
-            text
-            + " "
-            + link_url
+    matches = pattern.findall(text)
+
+    print(
+        "Apariciones de C2.1000:",
+        len(matches)
+    )
+
+    for number, match in enumerate(
+        matches[:3],
+        1
+    ):
+
+        cleaned = re.sub(
+            r"\s+",
+            " ",
+            match
         )
 
-        if not any(
-            norm(keyword) in combined
-            for keyword in [
-                "c2.1000",
-                "cuerpo auxiliar administrativo",
-                "auxiliar administrativo",
-                "auxiliar administrativa",
-            ]
-        ):
-            continue
+        print(
+            f"\n----- RESULTADO {number} -----"
+        )
 
-        item_id = hashlib.sha256(
-            (
-                "EMPLEO_PUBLICO|"
-                + link_url
-                + "|"
-                + text
-            ).encode()
-        ).hexdigest()
-
-        items.append(
-            {
-                "id": item_id,
-                "source": "EMPLEO_PUBLICO",
-                "title": text,
-                "summary": "",
-                "updated": "",
-                "link": link_url,
-            }
+        print(
+            cleaned[:4000]
         )
 
     print(
-        "Procesos C2.1000 encontrados:",
-        len(items)
+        "========================================"
     )
 
-    return items
+    return []
 
 # ============================================================
 # CLASIFICACIÓN
