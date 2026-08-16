@@ -418,146 +418,47 @@ class PortalParser(HTMLParser):
 
 def fetch_empleo_publico():
 
-    base_url = (
+    url = (
         "https://portalempleopublico.juntadeandalucia.es/"
         "sede/acceso-tramites/"
         "seguimiento-procesos-selectivos"
+        "?field_en_curso_value=1"
+        "&field_20_de_plazas_adicionales_value=All"
     )
 
-    items = []
+    html = download(url)
 
-    seen_urls = set()
+    text = html.decode(
+        "utf-8",
+        errors="replace"
+    )
 
-    # El portal muestra actualmente hasta 10 páginas.
-    # Vamos a recorrerlas todas.
-    for page in range(0, 11):
+    print("========== PORTAL TEXT DEBUG ==========")
 
-        if page == 0:
+    # Buscamos directamente C2 y Auxiliar dentro del HTML
+    normalized = norm(text)
 
-            url = (
-                base_url
-                + "?field_en_curso_value=1"
-                + "&field_20_de_plazas_adicionales_value=All"
-            )
-
-        else:
-
-            url = (
-                base_url
-                + "?field_en_curso_value=1"
-                + "&field_20_de_plazas_adicionales_value=All"
-                + f"&page={page}"
-            )
-
-        try:
-
-            html = download(url)
-
-        except Exception as error:
-
-            print(
-                f"ERROR leyendo página {page}:",
-                error
-            )
-
-            continue
-
-
-        parser = PortalParser(url)
-
-        parser.feed(
-            html.decode(
-                "utf-8",
-                errors="replace"
-            )
-        )
-
+    for keyword in [
+        "c2.1000",
+        "c2 1000",
+        "auxiliar administrativo",
+        "auxiliar administrativa",
+        "cuerpo auxiliar administrativo",
+    ]:
 
         print(
-            f"Portal página {page}: "
-            f"{len(parser.links)} enlaces"
+            f"BUSCANDO '{keyword}':",
+            norm(keyword) in normalized
         )
 
-
-        for link in parser.links:
-
-            link_url = link["url"]
-            text = link["text"]
-
-            if not text:
-                continue
-
-            if link_url in seen_urls:
-                continue
-
-            seen_urls.add(link_url)
-
-
-            combined = norm(
-                text
-                + " "
-                + link_url
-            )
-
-
-            # ------------------------------------------------
-            # BUSQUEDA DE AUXILIAR ADMINISTRATIVO
-            # ------------------------------------------------
-
-            is_auxiliar = any(
-                norm(keyword) in combined
-                for keyword in [
-                    "c2.1000",
-                    "c2 1000",
-                    "cuerpo auxiliar administrativo",
-                    "cuerpo de auxiliares administrativos",
-                    "auxiliar administrativo",
-                    "auxiliar administrativa",
-                ]
-            )
-
-
-            if not is_auxiliar:
-                continue
-
-
-            item_id = hashlib.sha256(
-                (
-                    "EMPLEO_PUBLICO|"
-                    + link_url
-                    + "|"
-                    + text
-                ).encode()
-            ).hexdigest()
-
-
-            items.append(
-                {
-                    "id": item_id,
-                    "source": "EMPLEO_PUBLICO",
-                    "title": text,
-                    "summary": "",
-                    "updated": "",
-                    "link": link_url,
-                }
-            )
-
-
-            print(
-                "PORTAL MATCH:",
-                text,
-                "=>",
-                link_url
-            )
-
-
     print(
-        "Portal Empleo Público: "
-        f"{len(items)} procesos C2/Auxiliar encontrados"
+        "Longitud HTML:",
+        len(text)
     )
 
+    print("========================================")
 
-    return items
+    return []
 
 # ============================================================
 # CLASIFICACIÓN
