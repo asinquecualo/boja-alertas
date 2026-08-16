@@ -1,4 +1,13 @@
+"""Alertas BOJA y Portal de Empleo Público para Auxiliar Administrativo C2.1000.
+
+Pensado para ejecutarse periódicamente desde GitHub Actions.  Requiere las
+variables TELEGRAM_BOT_TOKEN y TELEGRAM_CHAT_ID cuando haya que enviar avisos.
+"""
+
+from __future__ import annotations
+
 import hashlib
+import html
 import json
 import os
 import re
@@ -7,999 +16,350 @@ import urllib.parse
 import urllib.request
 from html.parser import HTMLParser
 from pathlib import Path
+from typing import Any
 from xml.etree import ElementTree as ET
 
 
-# ============================================================
-# CONFIGURACIÓN
-# ============================================================
+BOJA_FEED_URL = "https://www.juntadeandalucia.es/boja/distribucion/s53.xml"
+PORTAL_BASE_URL = "https://portalempleopublico.juntadeandalucia.es"
+PORTAL_VIEW_PATH = "/sede/acceso-tramites/seguimiento-procesos-selectivos"
+PORTAL_AJAX_URL = f"{PORTAL_BASE_URL}/views/ajax"
+STATE_FILE = Path(os.environ.get("STATE_FILE", "state.json"))
 
-BOJA_FEED_URL = (
-    "https://www.juntadeandalucia.es/boja/distribucion/s53.xml"
-)
-
-EMPLEO_PUBLICO_URL = (
-    "https://portalempleopublico.juntadeandalucia.es/"
-)
-
-STATE_FILE = "state.json"
-
-BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
-
-
-# ============================================================
-# PALABRAS CLAVE
-# ============================================================
-
-ADMIN_KEYWORDS = [
-    "auxiliar administrativo",
-    "auxiliares administrativos",
-    "auxiliar administrativa",
-    "auxiliares administrativas",
-
-    "cuerpo auxiliar administrativo",
-    "cuerpo de auxiliares administrativos",
-
-    "escala auxiliar administrativa",
-    "escala de auxiliares administrativos",
-
-    "c2.1000",
-    "c2 1000",
-
-    "grupo c2",
-    "subgrupo c2",
-]
-
-
-CALL_KEYWORDS = [
-    "convocatoria",
-    "convocatorias",
-    "bases",
-    "proceso selectivo",
-    "procesos selectivos",
-    "turno libre",
-    "acceso libre",
-    "oposicion",
-    "oposiciones",
-    "plazas",
-    "oferta de empleo publico",
-    "oferta de empleo público",
-]
-
-
-IMPORTANT_KEYWORDS = [
-    "correccion de errores",
-    "corrección de errores",
-    "modificacion",
-    "modificación",
-
-    "admitidos",
-    "admitidas",
-    "excluidos",
-    "excluidas",
-
-    "tribunal",
-
-    "lista definitiva",
-    "lista provisional",
-
-    "plazo de presentacion",
-    "plazo de presentación",
-
-    "nombramiento",
-
-    "adjudicacion",
-    "adjudicación",
-]
-
-
-EXCLUDE = [
-    "libre designacion",
-    "libre designación",
-
-    "concurso de meritos",
-    "concurso de méritos",
-
-    "comision de servicios",
-    "comisión de servicios",
-
-    "promocion interna",
-    "promoción interna",
-]
-
-
-# ============================================================
-# BOJA
-# ============================================================
-
-BOJA_NS = {
-    "a": "http://www.w3.org/2005/Atom"
+# Valores del formulario Drupal confirmados para C2.1000.
+PORTAL_FILTERS = {
+    "field_tipo_de_acceso_target_id": "56",       # Acceso libre
+    "field_tipo_personal_target_id": "464",       # Personal funcionario
+    "field_cuerpo_grupo_target_id": "2398",       # C2.1 Cuerpo Auxiliar Administrativo
+    "field_especialidad_opcion_catego_target_id": "2405",  # C2.1000
+    "field_en_curso_value": "1",                  # En curso
 }
 
-
-# ============================================================
-# UTILIDADES
-# ============================================================
-
-def norm(text):
-    """
-    Normaliza texto:
-    - minúsculas
-    - elimina acentos
-    - espacios consecutivos
-    """
-
-    text = (text or "").lower()
-
-    text = unicodedata.normalize(
-        "NFD",
-        text
-    )
-
-    text = "".join(
-        c
-        for c in text
-        if unicodedata.category(c) != "Mn"
-    )
-
-    return re.sub(
-        r"\s+",
-        " ",
-        text
-    ).strip()
+BOJA_NS = {"a": "http://www.w3.org/2005/Atom"}
+ADMIN_KEYWORDS = (
+    "auxiliar administrativo", "auxiliares administrativos",
+    "auxiliar administrativa", "auxiliares administrativas",
+    "cuerpo auxiliar administrativo", "cuerpo de auxiliares administrativos",
+    "escala auxiliar administrativa", "c2.1000", "c2 1000",
+)
+CALL_KEYWORDS = (
+    "convocatoria", "bases", "proceso selectivo", "oposicion", "plazas",
+    "oferta de empleo publico", "turno libre", "acceso libre",
+)
+IMPORTANT_KEYWORDS = (
+    "correccion de errores", "modificacion", "admitidos", "admitidas",
+    "excluidos", "excluidas", "tribunal", "lista definitiva",
+    "lista provisional", "plazo de presentacion", "nombramiento",
+)
+EXCLUDE_KEYWORDS = (
+    "libre designacion", "concurso de meritos", "comision de servicios",
+    "promocion interna",
+)
 
 
-def clean_html(text):
-    """
-    Elimina etiquetas HTML.
-    """
-
-    if not text:
-        return ""
-
-    text = re.sub(
-        r"<script.*?</script>",
-        " ",
-        text,
-        flags=re.IGNORECASE | re.DOTALL
-    )
-
-    text = re.sub(
-        r"<style.*?</style>",
-        " ",
-        text,
-        flags=re.IGNORECASE | re.DOTALL
-    )
-
-    text = re.sub(
-        r"<[^>]+>",
-        " ",
-        text
-    )
-
-    return re.sub(
-        r"\s+",
-        " ",
-        text
-    ).strip()
+def norm(value: str) -> str:
+    """Normaliza texto para comparaciones que ignoran mayúsculas y acentos."""
+    value = unicodedata.normalize("NFD", (value or "").lower())
+    value = "".join(char for char in value if unicodedata.category(char) != "Mn")
+    return re.sub(r"\s+", " ", value).strip()
 
 
-# ============================================================
-# ESTADO
-# ============================================================
-
-def load_state():
-
-    try:
-
-        return set(
-            json.loads(
-                Path(STATE_FILE)
-                .read_text(
-                    encoding="utf-8"
-                )
-            )
-        )
-
-    except Exception:
-
-        return set()
+def clean_text(value: str) -> str:
+    return re.sub(r"\s+", " ", html.unescape(value or "")).strip()
 
 
-def save_state(ids):
-
-    Path(STATE_FILE).write_text(
-        json.dumps(
-            sorted(ids),
-            ensure_ascii=False,
-            indent=2
-        ),
-        encoding="utf-8"
-    )
+def identifier(*parts: str) -> str:
+    payload = "|".join(parts).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
-# ============================================================
-# DESCARGA HTTP
-# ============================================================
-
-def download(url):
-
-    request = urllib.request.Request(
+def request(url: str, data: dict[str, str] | None = None) -> bytes:
+    """Hace una petición HTTP con el encabezado de un navegador corriente."""
+    encoded = urllib.parse.urlencode(data).encode("utf-8") if data else None
+    req = urllib.request.Request(
         url,
+        data=encoded,
         headers={
-            "User-Agent": (
-                "Mozilla/5.0 "
-                "(compatible; boja-alertas/1.0)"
-            )
-        }
-    )
-
-    with urllib.request.urlopen(
-        request,
-        timeout=30
-    ) as response:
-
-        return response.read()
-
-
-# ============================================================
-# BOJA
-# ============================================================
-
-def fetch_boja():
-
-    return download(
-        BOJA_FEED_URL
-    )
-
-
-def parse_boja(xml):
-
-    root = ET.fromstring(xml)
-
-    items = []
-
-    for entry in root.findall(
-        "a:entry",
-        BOJA_NS
-    ):
-
-        title = entry.findtext(
-            "a:title",
-            "",
-            BOJA_NS
-        )
-
-        summary = entry.findtext(
-            "a:summary",
-            "",
-            BOJA_NS
-        )
-
-        eid = entry.findtext(
-            "a:id",
-            "",
-            BOJA_NS
-        )
-
-        updated = entry.findtext(
-            "a:updated",
-            "",
-            BOJA_NS
-        )
-
-        link = ""
-
-        for element in entry.findall(
-            "a:link",
-            BOJA_NS
-        ):
-
-            if element.attrib.get(
-                "rel",
-                "alternate"
-            ) == "alternate":
-
-                link = element.attrib.get(
-                    "href",
-                    ""
-                )
-
-                break
-
-        if not eid:
-
-            eid = hashlib.sha256(
-                (
-                    "BOJA|"
-                    + title
-                    + link
-                    + updated
-                ).encode()
-            ).hexdigest()
-
-        items.append(
-            {
-                "id": eid,
-                "source": "BOJA",
-                "title": clean_html(title),
-                "summary": clean_html(summary),
-                "updated": updated,
-                "link": link,
-            }
-        )
-
-    return items
-
-
-# ============================================================
-# PORTAL DE EMPLEO PÚBLICO
-# ============================================================
-
-class PortalParser(HTMLParser):
-    """
-    Parser HTML sencillo.
-
-    Extrae enlaces cuyo texto o URL parezcan corresponder
-    a anuncios del Portal de Empleo Público.
-    """
-
-    def __init__(self, base_url):
-
-        super().__init__(
-            convert_charrefs=True
-        )
-
-        self.base_url = base_url
-
-        self.current_href = None
-        self.current_text = []
-
-        self.links = []
-
-    def handle_starttag(
-        self,
-        tag,
-        attrs
-    ):
-
-        if tag.lower() != "a":
-            return
-
-        attributes = dict(attrs)
-
-        href = attributes.get(
-            "href"
-        )
-
-        if href:
-
-            self.current_href = (
-                urllib.parse.urljoin(
-                    self.base_url,
-                    href
-                )
-            )
-
-            self.current_text = []
-
-    def handle_data(self, data):
-
-        if self.current_href is not None:
-
-            self.current_text.append(
-                data
-            )
-
-    def handle_endtag(self, tag):
-
-        if (
-            tag.lower() == "a"
-            and self.current_href is not None
-        ):
-
-            text = clean_html(
-                " ".join(
-                    self.current_text
-                )
-            )
-
-            self.links.append(
-                {
-                    "url": self.current_href,
-                    "text": text,
-                }
-            )
-
-            self.current_href = None
-            self.current_text = []
-
-
-def fetch_empleo_publico():
-
-    base_url = (
-        "https://portalempleopublico.juntadeandalucia.es/"
-        "sede/acceso-tramites/"
-        "seguimiento-procesos-selectivos"
-    )
-
-    params = {
-        "field_ambito_target_id": "All",
-        "field_tipo_de_acceso_target_id": "56",
-        "field_tipo_personal_target_id": "464",
-        "field_cuerpo_grupo_target_id": "2405",
-        "field_especialidad_opcion_catego_target_id": "All",
-        "field_especialidad_lab_multi_target_id": "All",
-        "field_categoria_funcional_target_id": "All",
-        "field_estado_target_id": "All",
-        "field_en_curso_value": "1",
-        "field_20_de_plazas_adicionales_value": "All",
-    }
-
-    url = (
-        base_url
-        + "?"
-        + urllib.parse.urlencode(params)
-    )
-
-    print(
-        "Consultando Portal Empleo Público:"
-    )
-    print(url)
-
-    html = download(url)
-
-    text = html.decode(
-        "utf-8",
-        errors="replace"
-    )
-
-    # ----------------------------------------------------
-    # Extraer texto visible
-    # ----------------------------------------------------
-
-    visible = re.sub(
-        r"<script.*?</script>",
-        " ",
-        text,
-        flags=re.IGNORECASE | re.DOTALL
-    )
-
-    visible = re.sub(
-        r"<style.*?</style>",
-        " ",
-        visible,
-        flags=re.IGNORECASE | re.DOTALL
-    )
-
-    visible = re.sub(
-        r"<[^>]+>",
-        " ",
-        visible
-    )
-
-    visible = re.sub(
-        r"\s+",
-        " ",
-        visible
-    ).strip()
-
-    normalized = norm(visible)
-
-    print(
-        "Portal: texto recibido:",
-        len(visible),
-        "caracteres"
-    )
-
-    # ----------------------------------------------------
-    # Buscar indicios de resultados
-    # ----------------------------------------------------
-
-    keywords = [
-        "cuerpo auxiliar administrativo",
-        "auxiliar administrativo",
-        "convocatoria",
-        "acceso libre",
-        "proceso selectivo",
-        "pendiente apertura de plazo",
-        "en plazo de presentación",
-    ]
-
-    print(
-        "========== PORTAL FILTER RESULT =========="
-    )
-
-    for keyword in keywords:
-
-        print(
-            f"{keyword}:",
-            norm(keyword) in normalized
-        )
-
-    print(
-        "=========================================="
-    )
-
-    # ----------------------------------------------------
-    # Extraer enlaces
-    # ----------------------------------------------------
-
-    parser = PortalParser(
-        base_url
-    )
-
-    parser.feed(
-        text
-    )
-
-    print(
-        "Portal: enlaces encontrados:",
-        len(parser.links)
-    )
-
-    items = []
-
-    for link in parser.links:
-
-        title = link["text"].strip()
-        link_url = link["url"]
-
-        if not title:
-            continue
-
-        combined = norm(
-            title
-            + " "
-            + link_url
-        )
-
-        # Ignorar navegación general
-        if any(
-            x in combined
-            for x in [
-                "skip to main content",
-                "sede electronica",
-                "acceso a tramites",
-            ]
-        ):
-            continue
-
-        # Nos interesan procesos relacionados con
-        # Auxiliar Administrativo.
-        if not any(
-            x in combined
-            for x in [
-                "auxiliar administrativo",
-                "cuerpo auxiliar administrativo",
-                "c2.1000",
-            ]
-        ):
-            continue
-
-        item_id = hashlib.sha256(
-            (
-                "EMPLEO_PUBLICO|"
-                + link_url
-                + "|"
-                + title
-            ).encode()
-        ).hexdigest()
-
-        items.append(
-            {
-                "id": item_id,
-                "source": "EMPLEO_PUBLICO",
-                "title": title,
-                "summary": "",
-                "updated": "",
-                "link": link_url,
-            }
-        )
-
-        print(
-            "PROCESO:",
-            title,
-            "=>",
-            link_url
-        )
-
-    print(
-        "Portal Empleo Público:",
-        len(items),
-        "procesos encontrados"
-    )
-
-    return items
-
-# ============================================================
-# CLASIFICACIÓN
-# ============================================================
-
-def classify(item):
-
-    text = norm(
-        item["title"]
-        + " "
-        + item["summary"]
-    )
-
-    # Exclusiones
-    if any(
-        norm(keyword) in text
-        for keyword in EXCLUDE
-    ):
-
-        return None
-
-    admin_hits = [
-        keyword
-        for keyword in ADMIN_KEYWORDS
-        if norm(keyword) in text
-    ]
-
-    if not admin_hits:
-
-        return None
-
-    call_hits = [
-        keyword
-        for keyword in CALL_KEYWORDS
-        if norm(keyword) in text
-    ]
-
-    important_hits = [
-        keyword
-        for keyword in IMPORTANT_KEYWORDS
-        if norm(keyword) in text
-    ]
-
-    score = (
-        len(admin_hits) * 3
-        + len(call_hits) * 2
-        + len(important_hits) * 2
-    )
-
-    # Para el Portal de Empleo Público, una coincidencia
-    # clara con C2.1000/Auxiliar Administrativo ya es
-    # suficiente para considerar el anuncio.
-    if item["source"] == "EMPLEO_PUBLICO":
-
-        if not admin_hits:
-            return None
-
-        if score < 3:
-            return None
-
-    else:
-
-        if score < 5:
-            return None
-
-    # Clasificación
-    if (
-        "convocatoria" in text
-        or "proceso selectivo" in text
-    ):
-
-        category = "CONVOCATORIA"
-
-    elif "bases" in text:
-
-        category = "BASES"
-
-    elif (
-        "correccion de errores" in text
-        or "modificacion" in text
-    ):
-
-        category = "CORRECCIÓN / MODIFICACIÓN"
-
-    elif (
-        "admitidos" in text
-        or "admitidas" in text
-        or "lista definitiva" in text
-        or "lista provisional" in text
-    ):
-
-        category = "LISTAS"
-
-    elif "tribunal" in text:
-
-        category = "TRIBUNAL"
-
-    elif (
-        "plazo de presentacion" in text
-    ):
-
-        category = "PLAZO"
-
-    elif "adjudicacion" in text:
-
-        category = "ADJUDICACIÓN"
-
-    else:
-
-        category = "OTRA"
-
-    return {
-        "category": category,
-        "score": score,
-    }
-
-
-# ============================================================
-# TELEGRAM
-# ============================================================
-
-def telegram(message):
-
-    data = urllib.parse.urlencode(
-        {
-            "chat_id": CHAT_ID,
-            "text": message,
-            "parse_mode": "HTML",
-        }
-    ).encode()
-
-    request = urllib.request.Request(
-        (
-            "https://api.telegram.org/"
-            f"bot{BOT_TOKEN}/sendMessage"
-        ),
-        data=data,
-        method="POST",
-        headers={
-            "Content-Type":
-            "application/x-www-form-urlencoded"
+            "User-Agent": "Mozilla/5.0 (compatible; boja-alertas/2.0)",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": f"{PORTAL_BASE_URL}{PORTAL_VIEW_PATH}",
         },
     )
-
-    with urllib.request.urlopen(
-        request,
-        timeout=30
-    ) as response:
-
+    with urllib.request.urlopen(req, timeout=45) as response:
         return response.read()
 
 
-# ============================================================
-# MENSAJE
-# ============================================================
+def load_state() -> set[str]:
+    """Lee tanto el formato histórico (lista) como el formato con 'seen'."""
+    try:
+        saved = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        if isinstance(saved, list):
+            return {str(item) for item in saved}
+        if isinstance(saved, dict) and isinstance(saved.get("seen"), list):
+            return {str(item) for item in saved["seen"]}
+    except (OSError, json.JSONDecodeError):
+        pass
+    return set()
 
-def build_message(
-    item,
-    classification
-):
 
-    source = item["source"]
+def save_state(seen: set[str]) -> None:
+    # Una lista mantiene compatibilidad con el state.json creado por versiones previas.
+    STATE_FILE.write_text(
+        json.dumps(sorted(seen), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
-    if source == "BOJA":
 
-        source_icon = "🔵"
+class ResultsTableParser(HTMLParser):
+    """Extrae las filas y enlaces de las tablas del fragmento HTML de Drupal."""
 
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.tables: list[dict[str, Any]] = []
+        self._table: dict[str, Any] | None = None
+        self._in_caption = False
+        self._row: list[str] | None = None
+        self._cell: list[str] | None = None
+        self._cell_tag: str | None = None
+        self._link: str | None = None
+        self._link_text: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "table":
+            self._table = {"caption": "", "headers": [], "rows": []}
+        elif self._table is None:
+            return
+        elif tag == "caption":
+            self._in_caption = True
+            self._cell = []
+        elif tag == "tr":
+            self._row = []
+        elif tag in {"th", "td"} and self._row is not None:
+            self._cell = []
+            self._cell_tag = tag
+        elif tag == "a" and self._cell is not None:
+            self._link = dict(attrs).get("href")
+            self._link_text = []
+
+    def handle_data(self, data: str) -> None:
+        if self._cell is not None:
+            self._cell.append(data)
+        if self._link is not None:
+            self._link_text.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "a" and self._link is not None:
+            link_text = clean_text(" ".join(self._link_text))
+            if link_text and self._cell is not None:
+                self._cell.append(f" [URL:{self._link}]")
+            self._link = None
+            self._link_text = []
+        elif tag == "caption" and self._table is not None:
+            self._table["caption"] = clean_text(" ".join(self._cell or []))
+            self._cell = None
+            self._in_caption = False
+        elif tag in {"th", "td"} and self._cell is not None and self._row is not None:
+            value = clean_text(" ".join(self._cell))
+            if self._cell_tag == "th":
+                self._table["headers"].append(value)
+            else:
+                self._row.append(value)
+            self._cell = None
+            self._cell_tag = None
+        elif tag == "tr" and self._table is not None and self._row is not None:
+            if self._row:
+                self._table["rows"].append(self._row)
+            self._row = None
+        elif tag == "table" and self._table is not None:
+            self.tables.append(self._table)
+            self._table = None
+
+
+def drupal_results_html(payload: bytes) -> str:
+    """Obtiene el HTML del comando Drupal que sustituye la vista de resultados."""
+    try:
+        commands = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RuntimeError("El portal no devolvió JSON Drupal válido") from error
+
+    if not isinstance(commands, list):
+        raise RuntimeError("Respuesta Drupal inesperada: no contiene una lista de comandos")
+    for command in commands:
+        if (
+            isinstance(command, dict)
+            and command.get("command") == "insert"
+            and command.get("method") == "replaceWith"
+            and isinstance(command.get("data"), str)
+        ):
+            return command["data"]
+    raise RuntimeError("La respuesta Drupal no contiene el bloque de resultados")
+
+
+def extract_processes(results_html: str) -> list[dict[str, str]]:
+    if "No se han encontrado resultados" in results_html:
+        return []
+
+    parser = ResultsTableParser()
+    parser.feed(results_html)
+    processes: list[dict[str, str]] = []
+    for table in parser.tables:
+        headers = table["headers"]
+        for row in table["rows"]:
+            values = dict(zip(headers, row))
+            title = values.get("Proceso selectivo", "")
+            url_match = re.search(r"\s*\[URL:([^\]]+)\]", title)
+            link = urllib.parse.urljoin(PORTAL_BASE_URL, url_match.group(1)) if url_match else ""
+            title = re.sub(r"\s*\[URL:[^\]]+\]", "", title).strip()
+            if not title:
+                continue
+            summary = " · ".join(
+                f"{header}: {value}" for header, value in values.items()
+                if header != "Proceso selectivo" and value
+            )
+            # El hash contiene los datos que pueden cambiar (fase/plazas/OEP). Así
+            # una modificación visible del proceso genera una alerta una sola vez.
+            change_key = norm("|".join((table["caption"], title, summary, link)))
+            processes.append({
+                "id": identifier("EMPLEO_PUBLICO", change_key),
+                "source": "EMPLEO_PUBLICO",
+                "title": f"{table['caption']} — {title}" if table["caption"] else title,
+                "summary": summary,
+                "updated": "",
+                "link": link or f"{PORTAL_BASE_URL}{PORTAL_VIEW_PATH}",
+                "classification": {"category": "ACTUALIZACIÓN DEL PROCESO", "score": 0},
+            })
+    return processes
+
+
+def fetch_empleo_publico() -> list[dict[str, Any]]:
+    # En esta vista los filtros expuestos deben viajar en la URL. Si se envían
+    # únicamente en el cuerpo POST, Drupal responde correctamente pero ignora
+    # sus valores y muestra la primera categoría (A1.1).
+    endpoint = (
+        f"{PORTAL_AJAX_URL}?_wrapper_format=drupal_ajax&"
+        f"{urllib.parse.urlencode(PORTAL_FILTERS)}"
+    )
+    data = {
+        "view_name": "procesos_selectivos_buscador_simple",
+        "view_display_id": "procesos_selectivos",
+        "view_args": "",
+        "view_path": PORTAL_VIEW_PATH.lstrip("/"),
+        "view_base_path": PORTAL_VIEW_PATH.lstrip("/"),
+        # Drupal acepta este id estable de la vista; no es un token de sesión.
+        "view_dom_id": "c60e072c4dbd12df0635e4b55b1fff378ce7a362fd06e3b3ecd7a11c05b88e02",
+        "pager_element": "0",
+        "_drupal_ajax": "1",
+    }
+    result_html = drupal_results_html(request(endpoint, data))
+    items = extract_processes(result_html)
+    print(f"Portal C2.1000: {len(items)} procesos en curso")
+    return items
+
+
+def parse_boja(xml_data: bytes) -> list[dict[str, str]]:
+    root = ET.fromstring(xml_data)
+    items: list[dict[str, str]] = []
+    for entry in root.findall("a:entry", BOJA_NS):
+        title = clean_text(entry.findtext("a:title", "", BOJA_NS))
+        summary = clean_text(entry.findtext("a:summary", "", BOJA_NS))
+        updated = entry.findtext("a:updated", "", BOJA_NS)
+        link = ""
+        for candidate in entry.findall("a:link", BOJA_NS):
+            if candidate.attrib.get("rel", "alternate") == "alternate":
+                link = candidate.attrib.get("href", "")
+                break
+        entry_id = entry.findtext("a:id", "", BOJA_NS) or identifier("BOJA", title, link, updated)
+        items.append({"id": entry_id, "source": "BOJA", "title": title,
+                      "summary": summary, "updated": updated, "link": link})
+    return items
+
+
+def fetch_boja() -> list[dict[str, str]]:
+    # No usamos los encabezados AJAX para el RSS, pero el servidor los tolera.
+    items = parse_boja(request(BOJA_FEED_URL))
+    print(f"BOJA: {len(items)} publicaciones")
+    return items
+
+
+def classify_boja(item: dict[str, str]) -> dict[str, Any] | None:
+    text = norm(f"{item['title']} {item['summary']}")
+    if any(word in text for word in EXCLUDE_KEYWORDS):
+        return None
+    admin_hits = [word for word in ADMIN_KEYWORDS if word in text]
+    if not admin_hits:
+        return None
+    call_hits = [word for word in CALL_KEYWORDS if word in text]
+    important_hits = [word for word in IMPORTANT_KEYWORDS if word in text]
+    score = 3 * len(admin_hits) + 2 * len(call_hits) + 2 * len(important_hits)
+    if score < 5:
+        return None
+    if any(word in text for word in ("convocatoria", "proceso selectivo")):
+        category = "CONVOCATORIA"
+    elif "bases" in text:
+        category = "BASES"
+    elif any(word in text for word in ("admitidos", "admitidas", "excluidos", "excluidas")):
+        category = "LISTAS DE ADMITIDOS"
+    elif "tribunal" in text:
+        category = "TRIBUNAL"
     else:
+        category = "PUBLICACIÓN RELEVANTE"
+    return {"category": category, "score": score}
 
-        source_icon = "🟢"
 
-    title = clean_html(
-        item["title"]
+def telegram(message: str) -> None:
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        raise RuntimeError("Faltan TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID")
+    response = request(
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        {"chat_id": chat_id, "text": message, "parse_mode": "HTML", "disable_web_page_preview": "true"},
     )
+    try:
+        if not json.loads(response).get("ok"):
+            raise RuntimeError("Telegram rechazó el mensaje")
+    except json.JSONDecodeError as error:
+        raise RuntimeError("Respuesta no válida de Telegram") from error
 
-    summary = clean_html(
-        item["summary"]
-    )
 
-    if len(summary) > 500:
-
-        summary = (
-            summary[:497]
-            + "..."
-        )
-
-    message = (
-        f"{source_icon} "
-        f"<b>ALERTA EMPLEO PÚBLICO</b>\n\n"
-        f"<b>{title}</b>\n\n"
-        f"📂 Tipo: "
-        f"{classification['category']}\n"
-        f"🎯 Relevancia: "
-        f"{classification['score']}\n"
-        f"📌 Fuente: {source}\n"
-    )
-
-    if item["updated"]:
-
-        message += (
-            f"📅 {item['updated']}\n"
-        )
-
-    if summary:
-
-        message += (
-            f"\n{summary}\n"
-        )
-
-    if item["link"]:
-
-        message += (
-            "\n🔗 "
-            f'<a href="{item["link"]}">'
-            "Ver publicación</a>"
-        )
-
+def notification(item: dict[str, Any]) -> str:
+    label = "PORTAL EMPLEO PÚBLICO" if item["source"] == "EMPLEO_PUBLICO" else "BOJA"
+    category = item["classification"]["category"]
+    message = f"🔔 <b>{label} — {html.escape(category)}</b>\n\n<b>{html.escape(item['title'])}</b>"
+    if item.get("updated"):
+        message += f"\n📅 {html.escape(item['updated'])}"
+    if item.get("summary"):
+        message += f"\n\n{html.escape(item['summary'][:1200])}"
+    if item.get("link"):
+        message += f'\n\n🔗 <a href="{html.escape(item["link"], quote=True)}">Ver publicación</a>'
     return message
 
 
-# ============================================================
-# PROCESAMIENTO
-# ============================================================
+def main() -> None:
+    seen = load_state()
+    boja_items = fetch_boja()
+    portal_items = fetch_empleo_publico()
+    sent_or_irrelevant: set[str] = set()
 
-def process_items(
-    items,
-    state
-):
-
-    processed = set()
-
-    for item in reversed(items):
-
-        if item["id"] in state:
-
+    for item in boja_items + portal_items:
+        if item["id"] in seen:
             continue
+        if item["source"] == "BOJA":
+            classification = classify_boja(item)
+            if not classification:
+                # Los elementos BOJA irrelevantes se recuerdan para no reanalizarlos.
+                sent_or_irrelevant.add(item["id"])
+                continue
+            item["classification"] = classification
+        telegram(notification(item))
+        sent_or_irrelevant.add(item["id"])
+        print(f"Alerta enviada: {item['source']} — {item['title']}")
 
-        classification = classify(
-            item
-        )
-
-        if classification:
-
-            message = build_message(
-                item,
-                classification
-            )
-
-            try:
-
-                telegram(
-                    message
-                )
-
-                # Solo marcamos como procesado
-                # después de que Telegram confirme.
-                processed.add(
-                    item["id"]
-                )
-
-                print(
-                    "Alerta enviada:",
-                    item["source"],
-                    item["title"]
-                )
-
-            except Exception as error:
-
-                print(
-                    "ERROR Telegram:",
-                    item["id"],
-                    error
-                )
-
-                # No se marca como procesado.
-                # Se volverá a intentar en la
-                # siguiente ejecución.
-
-        else:
-
-            # No es relevante.
-            processed.add(
-                item["id"]
-            )
-
-    return processed
-
-
-# ============================================================
-# MAIN
-# ============================================================
-
-def main():
-
-    state = load_state()
-
-    all_items = []
-
-    # --------------------------------------------------------
-    # BOJA
-    # --------------------------------------------------------
-
-    try:
-
-        boja_items = parse_boja(
-            fetch_boja()
-        )
-
-        print(
-            f"BOJA: {len(boja_items)} publicaciones"
-        )
-
-        all_items.extend(
-            boja_items
-        )
-
-    except Exception as error:
-
-        print(
-            "ERROR consultando BOJA:",
-            error
-        )
-
-
-    # --------------------------------------------------------
-    # PORTAL DE EMPLEO PÚBLICO
-    # --------------------------------------------------------
-
-    try:
-
-        empleo_items = (
-            fetch_empleo_publico()
-        )
-
-        print(
-            "Portal Empleo Público: "
-            f"{len(empleo_items)} anuncios relevantes"
-        )
-
-        all_items.extend(
-            empleo_items
-        )
-
-    except Exception as error:
-
-        print(
-            "ERROR consultando Portal "
-            "de Empleo Público:",
-            error
-        )
-
-
-    if not all_items:
-
-        print(
-            "No se han obtenido publicaciones."
-        )
-
-        return
-
-
-    processed = process_items(
-        all_items,
-        state
-    )
-
-
-    state.update(
-        processed
-    )
-
-
-    # Mantener solamente los últimos 1000 IDs.
-    state = set(
-        list(state)[-1000:]
-    )
-
-
-    save_state(
-        state
-    )
-
-
-    print(
-        "Proceso terminado correctamente."
-    )
+    seen.update(sent_or_irrelevant)
+    save_state(seen)
+    print("Proceso terminado correctamente.")
 
 
 if __name__ == "__main__":
-
     main()
