@@ -502,7 +502,16 @@ def fetch_empleo_publico():
                 "link": url,
             }
         )
+        
+    print("DEBUG: enlaces encontrados:", len(parser.links))
 
+    for link in parser.links[:30]:
+        print(
+            "DEBUG LINK:",
+            link["text"][:150],
+            "=>",
+            link["url"]
+        )
     return items
 
 
