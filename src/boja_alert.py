@@ -424,51 +424,108 @@ def fetch_empleo_publico():
         "seguimiento-procesos-selectivos"
         "?field_en_curso_value=1"
         "&field_20_de_plazas_adicionales_value=All"
+        "&field_cuerpo_grupo_target_id=2405"
     )
+
+    print(
+        "Consultando Portal C2.1000:"
+    )
+    print(url)
 
     html = download(url)
 
-    text = html.decode(
-        "utf-8",
-        errors="replace"
+    parser = PortalParser(url)
+
+    parser.feed(
+        html.decode(
+            "utf-8",
+            errors="replace"
+        )
     )
 
-    print("========== C2.1000 FILTER DEBUG ==========")
-
-    # Buscar el option exacto de C2.1000
-    pattern = re.compile(
-        r"<select[^>]*>.*?"
-        r'<option[^>]*value="2405"[^>]*>'
-        r".*?C2\.1000 Cuerpo Auxiliar Administrativo"
-        r".*?</select>",
-        re.IGNORECASE | re.DOTALL
+    print(
+        "Enlaces encontrados:",
+        len(parser.links)
     )
 
-    match = pattern.search(text)
+    items = []
 
-    if match:
+    seen_urls = set()
 
-        block = re.sub(
-            r"\s+",
-            " ",
-            match.group(0)
-        )
+    for link in parser.links:
+
+        link_url = link["url"]
+        text = link["text"]
+
+        if not text:
+            continue
+
+        if link_url in seen_urls:
+            continue
+
+        seen_urls.add(link_url)
 
         print(
-            block[:5000]
+            "PORTAL LINK:",
+            text,
+            "=>",
+            link_url
         )
 
-    else:
+        # Ignoramos navegación
+        if (
+            "Skip to main content" in text
+            or text in [
+                "Inicio",
+                "Sede Electrónica del Empleo Público",
+                "Acceso A Trámites",
+            ]
+        ):
+            continue
 
-        print(
-            "NO SE ENCONTRÓ EL SELECT"
+        combined = norm(
+            text
+            + " "
+            + link_url
+        )
+
+        if not any(
+            norm(keyword) in combined
+            for keyword in [
+                "c2.1000",
+                "cuerpo auxiliar administrativo",
+                "auxiliar administrativo",
+                "auxiliar administrativa",
+            ]
+        ):
+            continue
+
+        item_id = hashlib.sha256(
+            (
+                "EMPLEO_PUBLICO|"
+                + link_url
+                + "|"
+                + text
+            ).encode()
+        ).hexdigest()
+
+        items.append(
+            {
+                "id": item_id,
+                "source": "EMPLEO_PUBLICO",
+                "title": text,
+                "summary": "",
+                "updated": "",
+                "link": link_url,
+            }
         )
 
     print(
-        "=========================================="
+        "Procesos C2.1000 encontrados:",
+        len(items)
     )
 
-    return []
+    return items
 
 # ============================================================
 # CLASIFICACIÓN
