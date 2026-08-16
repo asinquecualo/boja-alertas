@@ -418,7 +418,6 @@ class PortalParser(HTMLParser):
 
 def fetch_empleo_publico():
 
-    # Página oficial de procesos selectivos en curso
     procesos_url = (
         "https://portalempleopublico.juntadeandalucia.es/"
         "sede/acceso-tramites/"
@@ -440,85 +439,20 @@ def fetch_empleo_publico():
         )
     )
 
-    items = []
+    print("========== PORTAL DEBUG ==========")
+    print("Total enlaces:", len(parser.links))
 
-    seen_urls = set()
-
-    for link in parser.links:
-
-        url = link["url"]
-        text = link["text"]
-
-        if not text:
-            continue
-
-        if url in seen_urls:
-            continue
-
-        seen_urls.add(url)
-
-        combined = norm(
-            text
-            + " "
-            + url
-        )
-
-        # Buscamos específicamente nuestro cuerpo.
-        #
-        # C2.1000 es el código oficial del
-        # Cuerpo Auxiliar Administrativo.
-        if not any(
-            norm(keyword) in combined
-            for keyword in [
-                "c2.1000",
-                "c2 1000",
-                "cuerpo auxiliar administrativo",
-                "auxiliar administrativo",
-                "auxiliar administrativa",
-            ]
-        ):
-            continue
-
-        item_id = hashlib.sha256(
-            (
-                "EMPLEO_PUBLICO|"
-                + url
-                + "|"
-                + text
-            ).encode()
-        ).hexdigest()
-
-        items.append(
-            {
-                "id": item_id,
-                "source": "EMPLEO_PUBLICO",
-                "title": text,
-                "summary": "",
-                "updated": "",
-                "link": url,
-            }
-        )
-
-    print(
-        "Portal: enlaces analizados:",
-        len(parser.links)
-    )
-
-    print(
-        "Portal: anuncios C2/Auxiliar:",
-        len(items)
-    )
-
-    for item in items:
+    for number, link in enumerate(parser.links, 1):
 
         print(
-            "PORTAL MATCH:",
-            item["title"],
-            "=>",
-            item["link"]
+            f"LINK {number}: "
+            f"{link['text'][:300]} "
+            f"=> {link['url']}"
         )
 
-    return items
+    print("===================================")
+
+    return []
 
 
 # ============================================================
