@@ -422,13 +422,9 @@ def fetch_empleo_publico():
         "https://portalempleopublico.juntadeandalucia.es/"
         "sede/acceso-tramites/"
         "seguimiento-procesos-selectivos"
-        "?field_en_curso_value=1"
-        "&field_20_de_plazas_adicionales_value=All"
-        "&field_cuerpo_grupo_target_id=2405"
     )
 
-    print("Consultando Portal C2.1000:")
-    print(url)
+    print("Consultando formulario del Portal de Empleo Público...")
 
     html = download(url)
 
@@ -437,88 +433,85 @@ def fetch_empleo_publico():
         errors="replace"
     )
 
-    # --------------------------------------------------------
-    # Extraer texto visible del HTML
-    # --------------------------------------------------------
+    print("========== FORMULARIO PORTAL ==========")
 
-    visible = re.sub(
-        r"<script.*?</script>",
-        " ",
+    # Buscar todos los formularios
+    forms = re.findall(
+        r"<form\b.*?</form>",
         text,
         flags=re.IGNORECASE | re.DOTALL
     )
 
-    visible = re.sub(
-        r"<style.*?</style>",
-        " ",
-        visible,
-        flags=re.IGNORECASE | re.DOTALL
-    )
-
-    visible = re.sub(
-        r"<[^>]+>",
-        " ",
-        visible
-    )
-
-    visible = re.sub(
-        r"\s+",
-        " ",
-        visible
-    ).strip()
-
     print(
-        "========== TEXTO RESULTADO C2.1000 =========="
+        "Formularios encontrados:",
+        len(forms)
     )
 
-    print(
-        "Longitud texto:",
-        len(visible)
-    )
+    for i, form in enumerate(forms, 1):
 
-    # Mostrar las zonas alrededor de las palabras
-    # que sabemos que están presentes.
-    keywords = [
-        "Cuerpo Auxiliar Administrativo",
-        "Convocatoria",
-        "Acceso libre",
-    ]
-
-    for keyword in keywords:
-
-        position = norm(
-            visible
-        ).find(
-            norm(keyword)
-        )
+        # Solo nos interesa el formulario que contiene
+        # el filtro Cuerpo / Grupo.
+        if "field_cuerpo_grupo_target_id" not in form:
+            continue
 
         print(
-            f"\nKEYWORD: {keyword}"
+            f"\n----- FORMULARIO {i} -----"
         )
 
-        print(
-            "Posición:",
-            position
+        # action
+        action = re.search(
+            r'<form[^>]*action=["\']([^"\']+)',
+            form,
+            flags=re.IGNORECASE
         )
 
-        if position >= 0:
-
-            start = max(
-                0,
-                position - 500
-            )
-
-            end = min(
-                len(visible),
-                position + 2000
-            )
-
+        if action:
             print(
-                visible[start:end]
+                "ACTION:",
+                action.group(1)
             )
 
+        # method
+        method = re.search(
+            r'<form[^>]*method=["\']([^"\']+)',
+            form,
+            flags=re.IGNORECASE
+        )
+
+        if method:
+            print(
+                "METHOD:",
+                method.group(1)
+            )
+
+        # Todos los campos name/value
+        fields = re.findall(
+            r'<(?:input|select|button)[^>]*'
+            r'(?:name|value)=["\'][^"\']*["\'][^>]*>',
+            form,
+            flags=re.IGNORECASE
+        )
+
+        print(
+            "CAMPOS:"
+        )
+
+        for field in fields[:100]:
+            cleaned = re.sub(
+                r"\s+",
+                " ",
+                field
+            )
+            print(
+                cleaned[:500]
+            )
+
+        print(
+            "-----------------------------"
+        )
+
     print(
-        "\n=============================================="
+        "========================================"
     )
 
     return []
