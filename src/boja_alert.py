@@ -433,30 +433,44 @@ def fetch_empleo_publico():
         errors="replace"
     )
 
-    print("========== PORTAL TEXT DEBUG ==========")
+    print("========== PORTAL MATCH DEBUG ==========")
 
-    # Buscamos directamente C2 y Auxiliar dentro del HTML
-    normalized = norm(text)
+    # Buscar todas las apariciones de C2.1000
+    pattern = re.compile(
+        r".{0,500}c2\.1000.{0,1000}",
+        re.IGNORECASE | re.DOTALL
+    )
 
-    for keyword in [
-        "c2.1000",
-        "c2 1000",
-        "auxiliar administrativo",
-        "auxiliar administrativa",
-        "cuerpo auxiliar administrativo",
-    ]:
+    matches = pattern.findall(text)
+
+    print(
+        "Apariciones encontradas:",
+        len(matches)
+    )
+
+    for number, match in enumerate(
+        matches[:5],
+        1
+    ):
 
         print(
-            f"BUSCANDO '{keyword}':",
-            norm(keyword) in normalized
+            f"\n----- MATCH {number} -----"
+        )
+
+        # Reducimos espacios para que el log sea legible
+        cleaned = re.sub(
+            r"\s+",
+            " ",
+            match
+        )
+
+        print(
+            cleaned[:2000]
         )
 
     print(
-        "Longitud HTML:",
-        len(text)
+        "\n========================================"
     )
-
-    print("========================================")
 
     return []
 
