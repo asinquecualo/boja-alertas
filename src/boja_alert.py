@@ -447,20 +447,30 @@ def classify_boja(item: dict[str, str]) -> dict[str, Any] | None:
     return {"category": category, "score": score}
 
 
+def telegram_recipients() -> list[str]:
+    """Devuelve el chat principal y, opcionalmente, los destinatarios extra."""
+    primary = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    extra = os.environ.get("TELEGRAM_EXTRA_CHAT_IDS", "")
+    recipients = [primary, *(value.strip() for value in extra.split(","))]
+    # Conserva el orden y evita enviar el mismo aviso dos veces al mismo chat.
+    return list(dict.fromkeys(chat_id for chat_id in recipients if chat_id))
+
+
 def telegram(message: str) -> None:
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-    if not token or not chat_id:
-        raise RuntimeError("Faltan TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID")
-    response = request(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        {"chat_id": chat_id, "text": message, "parse_mode": "HTML", "disable_web_page_preview": "true"},
-    )
-    try:
-        if not json.loads(response).get("ok"):
-            raise RuntimeError("Telegram rechazó el mensaje")
-    except json.JSONDecodeError as error:
-        raise RuntimeError("Respuesta no válida de Telegram") from error
+    recipients = telegram_recipients()
+    if not token or not recipients:
+        raise RuntimeError("Faltan TELEGRAM_BOT_TOKEN o algún TELEGRAM_CHAT_ID")
+    for chat_id in recipients:
+        response = request(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            {"chat_id": chat_id, "text": message, "parse_mode": "HTML", "disable_web_page_preview": "true"},
+        )
+        try:
+            if not json.loads(response).get("ok"):
+                raise RuntimeError(f"Telegram rechazó el mensaje para el chat {chat_id}")
+        except json.JSONDecodeError as error:
+            raise RuntimeError("Respuesta no válida de Telegram") from error
 
 
 def notification(item: dict[str, Any]) -> str:
