@@ -1,0 +1,37 @@
+name: Probar Telegram
+
+on:
+  workflow_dispatch:
+
+jobs:
+  send-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enviar mensaje de prueba
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_IDS: ${{ secrets.TELEGRAM_CHAT_ID }},${{ secrets.TELEGRAM_EXTRA_CHAT_IDS }}
+        run: |
+          python - <<'PY'
+          import os
+          import urllib.parse
+          import urllib.request
+
+          token = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat_ids = dict.fromkeys(
+              value.strip()
+              for value in os.environ["CHAT_IDS"].split(",")
+              if value.strip()
+          )
+
+          for chat_id in chat_ids:
+              payload = urllib.parse.urlencode({
+                  "chat_id": chat_id,
+                  "text": "✅ Mensaje de prueba: las alertas de oposiciones están configuradas correctamente.",
+              }).encode()
+              urllib.request.urlopen(
+                  f"https://api.telegram.org/bot{token}/sendMessage",
+                  data=payload,
+                  timeout=30,
+              ).read()
+          PY
