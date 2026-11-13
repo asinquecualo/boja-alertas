@@ -11,6 +11,7 @@ import html
 import json
 import os
 import re
+import time
 import unicodedata
 import urllib.parse
 import urllib.request
@@ -19,11 +20,20 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 from datetime import date, timedelta
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 
-BOJA_FEED_URL = "https://www.juntadeandalucia.es/boja/distribucion/s53.xml"
-PORTAL_BASE_URL = "https://portalempleopublico.juntadeandalucia.es"
+BOJA_FEED_URL = os.environ.get(
+    "BOJA_FEED_URL",
+    os.environ.get(
+        "BOJA_FEED_PROXY_URL",
+        "https://www.juntadeandalucia.es/boja/distribucion/s53.xml",
+    ),
+)
+PORTAL_BASE_URL = os.environ.get(
+    "PORTAL_BASE_URL",
+    "https://portalempleopublico.juntadeandalucia.es",
+)
 PORTAL_VIEW_PATH = "/sede/acceso-tramites/seguimiento-procesos-selectivos"
 PORTAL_AJAX_URL = f"{PORTAL_BASE_URL}/views/ajax"
 BOP_SEVILLA_INDEX_URL = (
@@ -82,22 +92,43 @@ def identifier(*parts: str) -> str:
 def request(
     url: str,
     data: dict[str, str] | None = None,
-    accept: str = "application/json, text/javascript, */*; q=0.01",
+    accept: str = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    extra_headers: dict[str, str] | None = None,
+    timeout: int = 20,
+    retries: int = 2,
 ) -> bytes:
-    """Hace una petición HTTP con el encabezado de un navegador corriente."""
+    """Hace una petición HTTP con el encabezado de un navegador corriente y reintentos."""
     encoded = urllib.parse.urlencode(data).encode("utf-8") if data else None
-    req = urllib.request.Request(
-        url,
-        data=encoded,
-        headers={
-            "User-Agent": "Mozilla/5.0 (compatible; boja-alertas/2.0)",
-            "Accept": accept,
-            "X-Requested-With": "XMLHttpRequest",
-            "Referer": f"{PORTAL_BASE_URL}{PORTAL_VIEW_PATH}",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=45) as response:
-        return response.read()
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": accept,
+    }
+    if extra_headers:
+        headers.update(extra_headers)
+
+    req = urllib.request.Request(url, data=encoded, headers=headers)
+
+    last_error: Exception | None = None
+    for attempt in range(retries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                return response.read()
+        except HTTPError:
+            # Errores HTTP (como 404 en el BOE) no deben reintentarse ciegamente
+            raise
+        except (URLError, TimeoutError, OSError) as error:
+            last_error = error
+            if attempt < retries:
+                time.sleep(2 * (attempt + 1))
+                continue
+            raise
+    if last_error:
+        raise last_error
+    raise RuntimeError(f"Error desconocido al solicitar {url}")
 
 
 def load_state() -> set[str]:
@@ -334,7 +365,17 @@ def fetch_empleo_publico() -> list[dict[str, Any]]:
         "pager_element": "0",
         "_drupal_ajax": "1",
     }
-    result_html = drupal_results_html(request(endpoint, data))
+    result_html = drupal_results_html(
+        request(
+            endpoint,
+            data=data,
+            accept="application/json, text/javascript, */*; q=0.01",
+            extra_headers={
+                "X-Requested-With": "XMLHttpRequest",
+                "Referer": f"{PORTAL_BASE_URL}{PORTAL_VIEW_PATH}",
+            },
+        )
+    )
     items = extract_processes(result_html)
     print(f"Portal C2.1000: {len(items)} procesos en curso")
     return items
@@ -465,6 +506,7 @@ def telegram(message: str) -> None:
         response = request(
             f"https://api.telegram.org/bot{token}/sendMessage",
             {"chat_id": chat_id, "text": message, "parse_mode": "HTML", "disable_web_page_preview": "true"},
+            accept="application/json",
         )
         try:
             if not json.loads(response).get("ok"):
@@ -494,13 +536,26 @@ def notification(item: dict[str, Any]) -> str:
 
 def main() -> None:
     seen = load_state()
-    boja_items = fetch_boja()
-    portal_items = fetch_empleo_publico()
-    bop_sevilla_items = fetch_bop_sevilla()
-    boe_items = fetch_boe()
+    sources = [
+        ("BOJA", fetch_boja),
+        ("EMPLEO_PUBLICO", fetch_empleo_publico),
+        ("BOP_SEVILLA", fetch_bop_sevilla),
+        ("BOE", fetch_boe),
+    ]
+    all_items: list[dict[str, Any]] = []
+    failed_sources: list[str] = []
+
+    for name, fetcher in sources:
+        try:
+            items = fetcher()
+            all_items.extend(items)
+        except Exception as exc:
+            failed_sources.append(name)
+            print(f"⚠️ Error al consultar {name}: {exc}")
+
     sent_or_irrelevant: set[str] = set()
 
-    for item in boja_items + portal_items + bop_sevilla_items + boe_items:
+    for item in all_items:
         if item["id"] in seen:
             continue
         if item["source"] in {"BOJA", "BOP_SEVILLA", "BOE"}:
@@ -516,7 +571,10 @@ def main() -> None:
 
     seen.update(sent_or_irrelevant)
     save_state(seen)
-    print("Proceso terminado correctamente.")
+    if failed_sources:
+        print(f"Proceso finalizado con advertencias (fuentes no disponibles: {', '.join(failed_sources)}).")
+    else:
+        print("Proceso terminado correctamente.")
 
 
 if __name__ == "__main__":
