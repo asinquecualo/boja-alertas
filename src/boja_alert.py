@@ -11,6 +11,8 @@ import html
 import json
 import os
 import re
+import ssl
+import sys
 import time
 import unicodedata
 import urllib.parse
@@ -21,6 +23,11 @@ from typing import Any
 from xml.etree import ElementTree as ET
 from datetime import date, timedelta
 from urllib.error import HTTPError, URLError
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 
 BOJA_FEED_URL = os.environ.get(
@@ -113,14 +120,25 @@ def request(
     req = urllib.request.Request(url, data=encoded, headers=headers)
 
     last_error: Exception | None = None
+    ssl_context: ssl.SSLContext | None = None
     for attempt in range(retries + 1):
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as response:
+            with urllib.request.urlopen(req, timeout=timeout, context=ssl_context) as response:
                 return response.read()
         except HTTPError:
             # Errores HTTP (como 404 en el BOE) no deben reintentarse ciegamente
             raise
-        except (URLError, TimeoutError, OSError) as error:
+        except URLError as error:
+            last_error = error
+            # Si el error es de verificación SSL (antivirus o proxy local inspeccionando HTTPS)
+            if "CERTIFICATE_VERIFY_FAILED" in str(error) and ssl_context is None:
+                ssl_context = ssl._create_unverified_context()
+                continue
+            if attempt < retries:
+                time.sleep(2 * (attempt + 1))
+                continue
+            raise
+        except (TimeoutError, OSError) as error:
             last_error = error
             if attempt < retries:
                 time.sleep(2 * (attempt + 1))

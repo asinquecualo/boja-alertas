@@ -34,6 +34,7 @@ jobs:
       - name: Comprobar BOJA (Linux)
         if: runner.os != 'Windows'
         env:
+          PYTHONIOENCODING: "utf-8"
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_EXTRA_CHAT_IDS: ${{ secrets.TELEGRAM_EXTRA_CHAT_IDS }}
@@ -43,6 +44,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: cmd
         env:
+          PYTHONIOENCODING: "utf-8"
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_EXTRA_CHAT_IDS: ${{ secrets.TELEGRAM_EXTRA_CHAT_IDS }}
