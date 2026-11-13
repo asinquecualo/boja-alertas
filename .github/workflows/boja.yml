@@ -29,6 +29,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Python
+        if: github.event.inputs.runner == 'ubuntu-latest'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
