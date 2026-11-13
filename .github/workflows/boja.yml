@@ -48,7 +48,9 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_EXTRA_CHAT_IDS: ${{ secrets.TELEGRAM_EXTRA_CHAT_IDS }}
-        run: python src/boja_alert.py
+        run: |
+          set "PATH=%PATH%;C:\Users\JAF\AppData\Local\Programs\Python\Python312;C:\Users\JAF\AppData\Local\Programs\Python\Python312\Scripts;C:\Program Files\Python312;C:\Program Files\Git\cmd;C:\Program Files\Git\bin"
+          python src/boja_alert.py
 
       - name: Guardar estado (Linux)
         if: runner.os != 'Windows'
@@ -63,6 +65,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: cmd
         run: |
+          set "PATH=%PATH%;C:\Program Files\Git\cmd;C:\Program Files\Git\bin"
           git config user.name "boja-alertas"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add state.json
