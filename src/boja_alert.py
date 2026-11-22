@@ -304,13 +304,18 @@ class BopSevillaParser(HTMLParser):
         self._in_title = False
         self._title_text: list[str] = []
         self._current: dict[str, Any] | None = None
+        self._ignore_tags = False
 
     def _finish(self) -> None:
         if not self._current:
             return
         title = clean_text(self._current["title"])
         link = self._current["link"]
-        summary = clean_text(" ".join(self._current["summary"]))
+        raw_summary = " ".join(self._current["summary"])
+        # Limpieza de restos de scripts JS embebidos y enlaces de navegación
+        raw_summary = re.sub(r'\$\s*\([^)]*\)\s*\.\s*\w+\s*\([^)]*\)', '', raw_summary)
+        raw_summary = re.sub(r'\bIr al detalle\b', '', raw_summary, flags=re.IGNORECASE)
+        summary = clean_text(raw_summary)
         if title and link:
             cve_match = re.search(r"BOP-SE-\d{4}-\d+", summary, re.IGNORECASE)
             item_id = cve_match.group(0).upper() if cve_match else identifier(
@@ -327,6 +332,9 @@ class BopSevillaParser(HTMLParser):
         self._current = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in ("script", "style"):
+            self._ignore_tags = True
+            return
         if tag == "a":
             self._href = dict(attrs).get("href")
             self._anchor_text = []
@@ -335,14 +343,20 @@ class BopSevillaParser(HTMLParser):
             self._title_text = []
 
     def handle_data(self, data: str) -> None:
+        if self._ignore_tags:
+            return
         if self._href is not None:
             self._anchor_text.append(data)
+            return
         if self._in_title:
             self._title_text.append(data)
         elif self._current is not None:
             self._current["summary"].append(data)
 
     def handle_endtag(self, tag: str) -> None:
+        if tag in ("script", "style"):
+            self._ignore_tags = False
+            return
         if tag == "a" and self._href is not None:
             if clean_text(" ".join(self._anchor_text)).lower() == "ir al detalle":
                 # El siguiente enlace de detalle marca el fin del anuncio anterior.
@@ -358,6 +372,8 @@ class BopSevillaParser(HTMLParser):
                 self._next_link = ""
             self._in_title = False
             self._title_text = []
+        elif tag == "li" and self._current is not None:
+            self._finish()
 
     def close(self) -> None:
         super().close()
@@ -546,7 +562,12 @@ def notification(item: dict[str, Any]) -> str:
     if item.get("updated"):
         message += f"\n📅 {html.escape(item['updated'])}"
     if item.get("summary"):
-        message += f"\n\n{html.escape(item['summary'][:1200])}"
+        raw_summary = item["summary"]
+        raw_summary = re.sub(r'\$\s*\([^)]*\)\s*\.\s*\w+\s*\([^)]*\)', '', raw_summary)
+        raw_summary = re.sub(r'\bIr al detalle\b', '', raw_summary, flags=re.IGNORECASE)
+        summary = clean_text(raw_summary)
+        if summary:
+            message += f"\n\n{html.escape(summary[:1200])}"
     if item.get("link"):
         message += f'\n\n🔗 <a href="{html.escape(item["link"], quote=True)}">Ver publicación</a>'
     return message
